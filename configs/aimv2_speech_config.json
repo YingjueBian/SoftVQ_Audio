@@ -1,0 +1,56 @@
+{
+  "model_type": "aimv2",
+  "model_name": "aimv2-speech-base",
+  
+  "encoder_embed_dim": 1024,
+  "encoder_depth": 24,
+  "encoder_num_heads": 16,
+  "encoder_mlp_ratio": 4.0,
+  
+  "decoder_dim": 1024,
+  "decoder_depth": 24,
+  "decoder_num_heads": 16,
+  "decoder_ffn_dim": 4096,
+  
+  "n_mels": 128,
+  "max_time_frames": 1000,
+  "patch_size": [16, 16],
+  "speech_patch_dim": 256,
+  
+  "vocab_size": 50257,
+  "max_seq_length": 4096,
+  
+  "speech_loss_weight": 1.0,
+  "text_loss_weight": 1.0,
+  "dropout": 0.1,
+  "norm_eps": 1e-5,
+  
+  "dataset_path": "/zoomai/colddata/asr/dean/sound_dataset_colddata/laion-audio-300m-arrow_test",
+  "train_split": "train",
+  "eval_split": "validation",
+  
+  "sample_rate": 16000,
+  "n_fft": 400,
+  "hop_length": 160,
+  "win_length": 400,
+  "max_audio_length": 12.0,
+  
+  "tokenizer_name": "gpt2",
+  "max_text_length": 77,
+  
+  "batch_size": 8,
+  "gradient_accumulation_steps": 4,
+  "num_train_epochs": 5,
+  "learning_rate": 1e-4,
+  "warmup_steps": 10000,
+  "weight_decay": 0.01,
+  "adam_beta1": 0.9,
+  "adam_beta2": 0.98,
+  "max_grad_norm": 1.0,
+  "fp16": true,
+  "gradient_checkpointing": false,
+  "save_steps": 5000,
+  "eval_steps": 5000,
+  "logging_steps": 100,
+  "dataloader_num_workers": 8
+}
