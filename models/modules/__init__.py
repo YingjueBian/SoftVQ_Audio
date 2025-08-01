@@ -3,7 +3,8 @@
 from .to_audio import ToAudio
 from .rope_utils import compute_axial_cis, compute_mixed_cis, init_random_2d_freqs, init_t_xy
 from .vision_transformer import Attention, MoVQNorm, MoVQBlockv2
-from .vit_models import SoftVQDecoder, SoftVQEncoder
+from .vit_models import Decoder, Encoder
+from .HOG import HOGGeneratorMel
 
 __all__ = [
     'ToAudio',
@@ -14,6 +15,7 @@ __all__ = [
     'Attention',
     'MoVQNorm',
     'MoVQBlockv2',
-    'SoftVQDecoder',
-    'SoftVQEncoder'
+    'Decoder',
+    'Encoder',
+    'HOGGeneratorMel'
 ]

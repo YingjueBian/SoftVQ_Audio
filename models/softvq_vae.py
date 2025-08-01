@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Tuple, List, Dict, Any, Optional, Union, Callable, Sequence, Literal
 # from models.vision_transformer_softvq import Attention, MoVQNorm, MoVQBlockv2
 from models.quantizer import SoftVectorQuantizer
-from models.modules import SoftVQEncoder, SoftVQDecoder
+from models.modules import Encoder, Decoder
 from utils.model_utils import init_random_2d_freqs, init_t_xy, compute_axial_cis, compute_mixed_cis
 
 try:
@@ -83,7 +83,7 @@ class SoftVQConfig(PretrainedConfig):
         # model parameters
         encoder_ch_mult: Optional[List[int]] = None,
         decoder_ch_mult: Optional[List[int]] = None,
-        z_channels: int = 256,
+
         dropout_p: float = 0.0,
 
         # enc_type: str = 'vit',
@@ -162,7 +162,6 @@ class SoftVQConfig(PretrainedConfig):
         # model parameters
         self.encoder_ch_mult = encoder_ch_mult
         self.decoder_ch_mult = decoder_ch_mult
-        self.z_channels = z_channels
         self.dropout_p = dropout_p
 
         # encoder
@@ -252,12 +251,48 @@ class SoftVQModel(PreTrainedModel):
         else:
             self.repa_z_dim = None
         
-        self.encoder = SoftVQEncoder(in_channels=1, config=config)
+        self.encoder = Encoder(in_channels=1, 
+                               num_latent_tokens=config.num_latent_tokens,
+                               model_name= config.encoder_model,
+                               model_kwargs={
+                                    'img_size': (config.n_mels, config.max_time_frames),
+                                    'patch_size': config.enc_patch_size,
+                                    'drop_path_rate': config.enc_drop_path_rate,
+                                   },
+                                pretrained=config.enc_pretrained,
+                                tuning_method=config.enc_tuning_method,
+                                tuning_kwargs={'r': 8},
+                                use_ape=config.enc_use_ape,
+                                use_rope=config.enc_use_rope,
+                                rope_mixed=config.enc_rope_mixed,
+                                rope_theta=config.enc_rope_theta,
+                                enc_token_drop=config.enc_token_drop,
+                                enc_token_drop_max=config.enc_token_drop_max,
+                                base_spec_size=config.base_spec_size,
+                                )
+                                
         self.quant_conv = nn.Linear(self.encoder.embed_dim, config.codebook_embed_dim)
 
-        self.decoder = SoftVQDecoder(
-            in_channels=1, config=config
-        )
+        self.decoder = Decoder(in_channels=1, 
+                               num_latent_tokens=config.num_latent_tokens,
+                               model_name=config.decoder_model,
+                               model_kwargs={
+                                    'img_size': (config.n_mels, config.max_time_frames),
+                                    'patch_size': config.dec_patch_size,
+                                    'drop_path_rate': config.dec_drop_path_rate,
+                                    'latent_dim': config.codebook_embed_dim,},
+                                pretrained=config.dec_pretrained,
+                                tuning_method=config.dec_tuning_method,
+                                tuning_kwargs={'r': 8},
+                                use_ape=config.dec_use_ape,
+                                use_rope=config.dec_use_rope,
+                                rope_mixed=config.dec_rope_mixed,
+                                rope_theta=config.dec_rope_theta,
+                                cls_token=config.dec_cls_token,
+                                codebook_embed_dim=config.codebook_embed_dim,
+                                to_audio=config.to_audio,
+                                base_spec_size=config.base_spec_size,
+                               )
         self.post_quant_conv = nn.Linear(config.codebook_embed_dim, self.decoder.embed_dim)
         
         # check movq
@@ -266,11 +301,13 @@ class SoftVQModel(PreTrainedModel):
         else:
             self.use_movq = False
         
-        self.quantize = SoftVectorQuantizer(config.codebook_size, config.codebook_embed_dim, 
+        self.quantize = SoftVectorQuantizer(config.codebook_size, 
+                                            config.codebook_embed_dim, 
                                             config.entropy_loss_ratio, 
                                             config.tau,                                   
                                             config.num_codebooks,
-                                            config.codebook_l2_norm, config.codebook_show_usage)
+                                            config.codebook_l2_norm, 
+                                            config.codebook_show_usage)
     def mean_flat(self, x):
         """
         Take the mean over all non-batch dimensions.
