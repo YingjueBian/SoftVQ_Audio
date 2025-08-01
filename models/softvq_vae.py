@@ -21,8 +21,8 @@ from transformers import PretrainedConfig, PreTrainedModel
 from dataclasses import dataclass, field
 from typing import Tuple, List, Dict, Any, Optional, Union, Callable, Sequence, Literal
 # from models.vision_transformer_softvq import Attention, MoVQNorm, MoVQBlockv2
-from .quantizer import SoftVectorQuantizer
-from .modules import SoftVQEncoder, SoftVQDecoder
+from models.quantizer import SoftVectorQuantizer
+from models.modules import SoftVQEncoder, SoftVQDecoder
 from utils.model_utils import init_random_2d_freqs, init_t_xy, compute_axial_cis, compute_mixed_cis
 
 try:
@@ -104,10 +104,14 @@ class SoftVQConfig(PretrainedConfig):
         dec_pretrained: bool = False,
 
         # rope
-        ues_ape: bool = True,
-        use_rope: bool = False,
-        rope_mixed: bool = False,
-        rope_theta: float = 10.0,
+        enc_use_ape: bool = True,
+        enc_use_rope: bool = False,
+        dec_use_ape: bool = True,
+        dec_use_rope: bool = False,
+        enc_rope_mixed: bool = False,
+        enc_rope_theta: float = 10.0,
+        dec_rope_mixed: bool = False,
+        dec_rope_theta: float = 10.0,
 
         # repa for vit
         repa: bool = False,
@@ -121,6 +125,8 @@ class SoftVQConfig(PretrainedConfig):
         enc_token_drop: float = 0.0,
         enc_token_drop_max: float = 0.6,
         
+        dec_cls_token: bool = True,
+
         # auxdecoder model
         aux_dec_model: str = 'vit_tiny_patch14_dinov2_movq',
         aux_loss_mask: bool = False,
@@ -166,6 +172,8 @@ class SoftVQConfig(PretrainedConfig):
         self.enc_drop_path_rate = enc_drop_path_rate
         self.enc_pretrained = enc_pretrained
         self.enc_tuning_method = enc_tuning_method
+        self.enc_use_ape = enc_use_ape
+        self.enc_use_rope = enc_use_rope
 
         # decoder
         self.decoder_model = decoder_model
@@ -173,6 +181,9 @@ class SoftVQConfig(PretrainedConfig):
         self.dec_drop_path_rate = dec_drop_path_rate
         self.dec_pretrained = dec_pretrained
         self.dec_tuning_method = dec_tuning_method
+        self.dec_use_ape = dec_use_ape
+        self.dec_use_rope = dec_use_rope
+        self.dec_cls_token = dec_cls_token
 
         # repa
         self.repa = repa
@@ -196,10 +207,11 @@ class SoftVQConfig(PretrainedConfig):
         self.aux_clip_dec = aux_clip_dec
 
         # rope
-        self.use_ape = ues_ape
-        self.use_rope = use_rope
-        self.rope_mixed = rope_mixed
-        self.rope_theta = rope_theta
+        self.enc_rope_mixed = enc_rope_mixed
+        self.enc_rope_theta = enc_rope_theta
+
+        self.dec_rope_mixed = dec_rope_mixed
+        self.dec_rope_theta = dec_rope_theta
 
         self.to_audio = to_audio
 
@@ -244,7 +256,7 @@ class SoftVQModel(PreTrainedModel):
         self.quant_conv = nn.Linear(self.encoder.embed_dim, config.codebook_embed_dim)
 
         self.decoder = SoftVQDecoder(
-            in_channels=3, config=config
+            in_channels=1, config=config
         )
         self.post_quant_conv = nn.Linear(config.codebook_embed_dim, self.decoder.embed_dim)
         

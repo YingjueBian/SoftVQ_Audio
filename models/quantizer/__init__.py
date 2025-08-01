@@ -1,1 +1,1 @@
-from softvq import compute_entropy_loss, SoftVectorQuantizer
+from .softvq import compute_entropy_loss, SoftVectorQuantizer

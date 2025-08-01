@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,6 +22,7 @@ from typing import Any, Dict, Optional, Callable, Tuple, Union, List
 from sklearn.metrics import accuracy_score, f1_score, precision_recall_fscore_support
 
 from models.softvq_loss import DiscriminatorLoss, GeneratorLoss, FeatureMatchingLoss, ReconstructionLoss, hinge_gen_loss
+from models.softvq_vae import SoftVQConfig, SoftVQModel
 from models.discriminators import MultiResolutionDiscriminator
 from utils.diff_aug import DiffAugment
 
@@ -101,6 +106,7 @@ class SoftVQ_GANTrainer(Trainer):
         max_steps: Optional[int] = None,
         use_diff_aug: bool = False,
         rec_weight: float = 1.0,
+        # device: Optional[torch.device] = None,
         **kwargs,
     ):
         super().__init__(model=generator, args=train_args, **kwargs)
@@ -123,6 +129,7 @@ class SoftVQ_GANTrainer(Trainer):
         self.feature_matching_loss = FeatureMatchingLoss()
         self.rec_loss = ReconstructionLoss(loss_type=recons_loss)
         self.multi_res_disc = MultiResolutionDiscriminator()
+        self.multi_res_disc.to(train_args.device)
         self.gen_adv_loss = hinge_gen_loss
 
         # loss_weight
@@ -204,7 +211,11 @@ class SoftVQ_GANTrainer(Trainer):
     # ----------------------------------
     # 核心训练逻辑
     # ----------------------------------
-    def training_step(self, model: nn.Module, inputs: Dict[str, Any]) -> torch.Tensor:
+    def training_step(self, 
+                      model: nn.Module, 
+                      inputs: Dict[str, Any], 
+                      num_items: int | None = None
+                      ) -> torch.Tensor:
         gen, disc, args = self.gen, self.disc, self.args
         inputs = self._prepare_inputs(inputs)
         mel, meta = self._split_batch(inputs)
@@ -220,20 +231,25 @@ class SoftVQ_GANTrainer(Trainer):
 
             # DiffAug 先做
             if self.use_diff_aug:
-                real_aug = DiffAugment(real, policy="color,translation,cutout", prob=0.5)
-                fake_aug = DiffAugment(fake,  policy="color,translation,cutout", prob=0.5)
+                real_aug = DiffAugment(real, policy="gain,shift,cutout,tmask", prob=0.5)
+                fake_aug = DiffAugment(fake,  policy="gain,shift,cutout,tmask", prob=0.5)
             else:
                 real_aug, fake_aug = real, fake
 
             self.disc_optimizer.zero_grad(set_to_none=True)
 
             # 主判别器
-            logits_real, _ = disc(real_aug, mel)
-            logits_fake, _ = disc(fake_aug.detach(), mel)
-            loss_d_main = self.disc_loss(logits_real, logits_fake, args.loss_type)
+            print(f"real_aug shape: {real_aug.shape}")
+            logits_real = disc(real_aug)
+            print(f"logits_real shape: {logits_real.shape}")
+            logits_fake = disc(fake_aug)
+            print(f'fake_aug shape: {fake_aug.shape}')
+            print(f"logits_fake shape: {logits_fake.shape}")
+            # loss_d_main = self.disc_loss(logits_real, logits_fake, args.loss_type)
+            loss_d_main, _, _ = self.disc_loss(logits_real, logits_fake)
 
             # 多分辨率判别器
-            real_mrd, fake_mrd, _, _ = self.multi_res_disc(y=real_aug, y_hat=fake_aug.detach(), bandwidth_id=bw_id)
+            real_mrd, fake_mrd, _, _ = self.multi_res_disc(y_spec=real_aug, y_spec_hat=fake_aug.detach(), bandwidth_id=bw_id)
             loss_mrd, loss_mrd_real, _ = self.disc_loss(real_mrd, fake_mrd)
             loss_mrd = loss_mrd / len(loss_mrd_real)
 
@@ -246,7 +262,8 @@ class SoftVQ_GANTrainer(Trainer):
 
             self.log({"loss_d": loss_d.detach(),
                     "loss_d_main": loss_d_main.detach(),
-                    "loss_d_mrd": loss_mrd.detach()}, prog_bar=True)
+                    "loss_d_mrd": loss_mrd.detach()}
+                    )
 
             if self.accelerator.sync_gradients:
                 self._phase = "G"
@@ -263,11 +280,11 @@ class SoftVQ_GANTrainer(Trainer):
                 fake_aug = fake
 
             # 主判别器对抗
-            logits_fake, fake_feats = disc(fake_aug, mel)
+            logits_fake = disc(fake_aug)
             loss_g_adv = self.gen_adv_loss(logits_fake) * getattr(args, "disc_weight", 1.0)
 
             # MRD 对抗 + FM
-            _, fake_mrd, fmap_r_mrd, fmap_g_mrd = self.multi_res_disc(y=real, y_hat=fake, bandwidth_id=bw_id)
+            _, fake_mrd, fmap_r_mrd, fmap_g_mrd = self.multi_res_disc(y_spec=real, y_spec_hat=fake, bandwidth_id=bw_id)
             loss_gen_mrd, list_mrd = self.gen_loss(disc_outputs=fake_mrd)
             loss_gen_mrd = loss_gen_mrd / len(list_mrd)
 
@@ -310,7 +327,7 @@ class SoftVQ_GANTrainer(Trainer):
                 "loss_vq": loss_vq.detach(),
                 "lr_g": self.gen_optimizer.param_groups[0]["lr"],
                 "lr_d": self.disc_optimizer.param_groups[0]["lr"],
-            }, prog_bar=True)
+            })
 
             if self.accelerator.sync_gradients:
                 self._phase = "D"
@@ -387,3 +404,90 @@ class SoftVQ_GANTrainer(Trainer):
             return 1.0
         progress = (step - self.num_warmup_steps) / max(1, total_g_steps - self.num_warmup_steps)
         return max(0.0, 0.5 * (1.0 + math.cos(math.pi * 2.0 * num_cycles * progress)))
+
+
+from torch.utils.data import Dataset
+
+# ---------- 轻量随机数据集 ----------
+class RandomMelDataset(Dataset):
+    def __init__(self, num_samples=32, n_mels=128, t=1000):
+        self.data = torch.randn(num_samples, 1, n_mels, t)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return {
+            "mel_spectrogram": self.data[idx],
+            "audio_path": f"{idx}.wav",
+        }
+
+# ---------- GANTrainingArguments ----------
+from dataclasses import dataclass, field
+from transformers import TrainingArguments
+
+@dataclass
+class GANTrainingArguments(TrainingArguments):
+    # -------- 额外 GAN 超参数 --------
+    ema: bool = field(default=False)
+    ema_decay: float = field(default=0.999)
+    disc_weight: float = field(default=1.0)
+    fm_coeff: float = field(default=0.0)
+    mel_coeff: float = field(default=45.0)
+    decay_mel_coeff: bool = field(default=False)
+    vq_coeff: float = field(default=1.0)
+    warmup_steps: int = field(default=0)
+
+    # ★ 关键：保留父类的后置初始化 ★
+    def __post_init__(self):
+        super().__post_init__()      # 让 distributed_state、device 等被正确设置
+        # 你自己的额外校验 / 日志（可选）
+
+
+# ---------- main ----------
+def main():
+    # 1. 实例化模型
+    config = SoftVQConfig.from_pretrained("configs/softvq_config.json")
+    gen = SoftVQModel(config)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    gen.to(device)
+
+    # disc = DummyDiscriminator()
+    from models.discriminators import DinoDiscriminator
+    disc = DinoDiscriminator()
+    disc.to(device)
+
+    # 2. 训练参数
+    args = GANTrainingArguments(
+        output_dir="debug_runs",
+        per_device_train_batch_size=4,
+        num_train_epochs=1,          # 只跑 1 epoch
+        learning_rate=2e-4,
+        logging_steps=1,
+        evaluation_strategy="no",    # 先关闭 eval
+        report_to=[],                # 禁掉 wandb 等
+        remove_unused_columns=False,
+        save_strategy="no",
+        max_steps=10,                # 跑 10 step 演示
+        # device=device,
+    )
+
+    # 3. 数据
+    train_ds = RandomMelDataset()
+
+    # 4. Trainer（关键：添加 train_dataset=train_ds）
+    trainer = SoftVQ_GANTrainer(
+        generator=gen,
+        discriminator=disc,
+        noise_sampler=None,
+        train_args=args,
+        max_steps=args.max_steps,
+        train_dataset=train_ds,   # ← 必需！
+    )
+    trainer.configure_optimizers()  # 初始化优化器和调度器
+
+    # 5. 开始训练
+    trainer.train()
+
+if __name__ == "__main__":
+    main()

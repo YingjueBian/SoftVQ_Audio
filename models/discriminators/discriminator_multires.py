@@ -24,12 +24,12 @@ class MultiResolutionDiscriminator(nn.Module):
              for r in resolutions]
         )
 
-    def forward(self, y_spec, y_hat_spec, bandwidth_id=None):
+    def forward(self, y_spec, y_spec_hat, bandwidth_id=None):
         # y_spec/y_hat_spec: (B, F, T)
         y_d_rs, y_d_gs, fmap_rs, fmap_gs = [], [], [], []
         for d in self.discriminators:
             y_d_r, fmap_r = d(x=y_spec, cond_embedding_id=bandwidth_id)
-            y_d_g, fmap_g = d(x=y_hat_spec, cond_embedding_id=bandwidth_id)
+            y_d_g, fmap_g = d(x=y_spec_hat, cond_embedding_id=bandwidth_id)
             y_d_rs.append(y_d_r); fmap_rs.append(fmap_r)
             y_d_gs.append(y_d_g); fmap_gs.append(fmap_g)
         return y_d_rs, y_d_gs, fmap_rs, fmap_gs
@@ -72,7 +72,7 @@ class DiscriminatorR(nn.Module):
         if not self.expect_spectrum:
             x = self._spectrogram_old(x)  # 原始 torch.stft 实现
         # x: (B, F, T)
-        x = x.unsqueeze(1)               # -> (B, 1, F, T)
+        # x = x.unsqueeze(1)               # -> (B, 1, F, T)
 
         for l in self.convs:
             x = l(x)

@@ -84,38 +84,55 @@ class ToAudio(nn.Module):
             raise NotImplementedError
 
     def get_last_layer(self):
-        if self.to_pixel_name == 'linear':
+        if self.to_audio_name == 'linear':
             return self.model.weight
-        elif self.to_pixel_name == 'siren':
+        elif self.to_audio_name == 'siren':
             return self.model[1].linear.weight
-        elif self.to_pixel_name == 'conv':
+        elif self.to_audio_name == 'conv':
             return self.model[-1].weight
         else:
             return None
 
-    def unpatchify(self, x):
+    def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x: (N, L, patch_size**2 *3)
-        imgs: (N, 3, H, W)
+        对应图像版 unpatchify 的声谱图版本
+        Args
+        ----
+        x : (B, L, C * pf * pt)
+            L  =  (F // pf) * (T // pt)
+        Returns
+        -------
+        spec : (B, C, F, T)
         """
-        p = self.patch_size
-        h = w = int(x.shape[1] ** .5)
-        assert h * w == x.shape[1], print(h, w, x.shape[1])
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, 3))
-        x = torch.einsum('nhwpqc->nchpwq', x)
-        imgs = x.reshape(shape=(x.shape[0], 3, h * p, h * p))
-        return imgs
+        B, L, _ = x.shape
+        C, pf, pt = self.in_channels, self.patch_freq, self.patch_time
+        F,  T     = self.spec_size
+
+        # 计算补丁网格尺寸
+        h = F // pf          # 补丁在频率方向的个数
+        w = T // pt          # 补丁在时间方向的个数
+        assert h * w == L, f"token 数不匹配: expected {h*w}, got {L}"
+
+        # (B, h*w, C·pf·pt)  →  (B, h, w, pf, pt, C)
+        x = x.reshape(B, h, w, pf, pt, C)
+
+        # 把 C 维提前，并把小 patch 拼回完整频率和时间分辨率
+        # 维度次序: B, C, h, pf, w, pt
+        x = x.permute(0, 5, 1, 3, 2, 4)          # (B, C, h, pf, w, pt)
+        spec = x.reshape(B, C, h*pf, w*pt)       # (B, C, F, T)
+
+        return spec
 
     def forward(self, x):
-        if self.to_pixel_name == 'linear':
+        if self.to_audio_name == 'linear':
             x = self.model(x)
             x = self.unpatchify(x)
-        elif self.to_pixel_name == 'siren':
+        elif self.to_audio_name == 'siren':
             x = self.model(x)
             x = x.view(x.shape[0], self.in_channels, self.patch_size * int(self.num_patches ** 0.5),
                        self.patch_size * int(self.num_patches ** 0.5))
-        elif self.to_pixel_name == 'conv':
+        elif self.to_audio_name == 'conv':
             x = self.model(x)
-        elif self.to_pixel_name == 'identity':
+        elif self.to_audio_name == 'identity':
             pass
         return x

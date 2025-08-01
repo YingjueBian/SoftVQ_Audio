@@ -53,12 +53,13 @@ class SoftVQEncoder(nn.Module):
         model_kwargs = {
             'img_size': (F, T),
             'patch_size': (pf, pt),
-            'drop_path_rate': config.drop_path_rate,
+            'drop_path_rate': config.enc_drop_path_rate,
+            'in_chans': in_channels 
         }
 
         model = create_model(
             self.model_name,
-            pretrained=config.pretrained,
+            pretrained=config.enc_pretrained,
             **model_kwargs
         )
 
@@ -264,13 +265,13 @@ class SoftVQDecoder(nn.Module):
         model_kwargs = {
             'img_size': (F, T),
             'patch_size': (pf, pt),
-            'drop_path_rate': config.drop_path_rate,
+            'drop_path_rate': config.dec_drop_path_rate,
             'latent_dim': config.codebook_embed_dim,
         }
 
         model = create_model(
-            config.model_name,
-            pretrained=config.pretrained,
+            self.model_name,
+            pretrained=config.dec_pretrained,
             **model_kwargs
         )
 
@@ -451,8 +452,8 @@ class SoftVQDecoder(nn.Module):
         else:
             x = self.model.norm(x)
 
-        x = x[:, self.num_prefix_tokens:self.num_img_tokens + self.num_prefix_tokens]
+        x = x[:, self.num_prefix_tokens:self.num_aud_tokens + self.num_prefix_tokens]
 
-        out = self.to_pixel(x)
+        out = self.to_audio(x)
 
         return out
