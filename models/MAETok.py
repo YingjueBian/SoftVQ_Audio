@@ -23,7 +23,7 @@ from typing import Tuple, List, Dict, Any, Optional, Union, Callable, Sequence, 
 # from models.vision_transformer_softvq import Attention, MoVQNorm, MoVQBlockv2
 from models.quantizer import SoftVectorQuantizer
 from models.modules import Encoder, Decoder, HOGGeneratorMel
-from models.modules.softvq_vae import SoftVQVAE, Normalize, Denormalize
+from models.softvq_vae import SoftVQModel, Normalize, Denormalize
 from utils.model_utils import init_random_2d_freqs, init_t_xy, compute_axial_cis, compute_mixed_cis
 
 try:
@@ -139,8 +139,6 @@ class MAETokConfig(PretrainedConfig):
         # model parameters
         self.encoder_ch_mult = encoder_ch_mult
         self.decoder_ch_mult = decoder_ch_mult
-        self.z_channels = z_channels
-        self.dropout_p = dropout_p
 
         # encoder
         self.encoder_model = encoder_model
@@ -193,7 +191,7 @@ class MAETokConfig(PretrainedConfig):
         self.to_audio = to_audio
         
 
-class MAETokModel(SoftVQVAE, PreTrainedModel):
+class MAETokModel(SoftVQModel, PreTrainedModel):
     config_class = MAETokConfig
     def __init__(self, config: MAETokConfig):
         config.repa = True # for dinov2 decoder
@@ -256,7 +254,7 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
                 cls_token=config.aux_dec_cls_token,
                 codebook_embed_dim=config.codebook_embed_dim,
                 to_audio='identity',
-                base_img_size=config.base_spec_size
+                base_spec_size=config.base_spec_size
             )
             self.post_quant_conv_dino = nn.Linear(config.codebook_embed_dim, self.decoder_dino.embed_dim)
             self.to_audio_dino = nn.Linear(self.decoder_dino.embed_dim, self.repa_model.embed_dim)
@@ -273,7 +271,7 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
                                            patch_size=config.repa_patch_size)
             for param in self.clip_model.parameters():
                 param.requires_grad = False
-            self.clip_model.dynamic_img_size = True
+            # self.clip_model.dynamic_img_size = True # Not sure if this is correct
             self.clip_model.eval()
             self.clip_de_scale = Denormalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             self.clip_scale = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -305,7 +303,12 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
                 self.clip_use_movq = True 
             else:
                 self.clip_use_movq = False
-
+    
+    def mean_flat(self, x):
+        """
+        Take the mean over all non-batch dimensions.
+        """
+        return torch.mean(x, dim=list(range(1, len(x.size()))))
 
     def encode(self, x):
         
@@ -351,6 +354,8 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
 
     def forward(self, input):
         b, _, h, w = input.size()
+        # print('input shape: ', input.shape)
+        # encode
         if self.training:
             quant, diff, info, mask = self.encode(input)
         else:
@@ -364,7 +369,7 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
             # decode hog feature
             if self.aux_hog_decoder:
                 dec_hog = self.decode_hog(quant, x=input, h=h, w=w)   
-                dec_hog = self.to_pixel_hog(dec_hog)
+                dec_hog = self.to_audio_hog(dec_hog)
                 # get hog_target
                 z_hog = self.hog_generator(input) 
                 if self.aux_loss_mask:
@@ -378,7 +383,7 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
             # decode dinov2 feature
             if self.aux_dino_decoder:
                 dec_dino = self.decode_dino(quant, x=input, h=h, w=w)
-                dec_dino = self.to_pixel_dino(dec_dino)
+                dec_dino = self.to_audio_dino(dec_dino)
                 
                 # get z from repa_encoder
                 rescale_x = self.scale(self.de_scale(input))
@@ -391,7 +396,7 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
                     dino_rec_loss = -(dec_dino * z_dino).sum(dim=-1, keepdim=True)
                     dino_rec_loss = (dino_rec_loss * mask).sum() / mask.sum()
                 else:
-                    dino_rec_loss = mean_flat(-(dec_dino * z_dino).sum(dim=-1))
+                    dino_rec_loss = self.mean_flat(-(dec_dino * z_dino).sum(dim=-1))
                     dino_rec_loss = dino_rec_loss.mean()
             else:
                 dino_rec_loss = 0.0
@@ -399,9 +404,10 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
             # deocde clip feature
             if self.aux_clip_decoder:
                 dec_clip = self.decode_clip(quant, x=input, h=h, w=w)
-                dec_clip = self.to_pixel_clip(dec_clip)
+                dec_clip = self.to_audio_clip(dec_clip)
                 # get clip_target
                 rescale_x = self.clip_scale(self.clip_de_scale(input))
+               
                 z_clip = self.clip_model.forward_features(rescale_x)[:, self.clip_model.num_prefix_tokens:]
                 
                 z_clip = F.normalize(z_clip, dim=-1)
@@ -411,7 +417,7 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
                     clip_rec_loss = -(dec_clip * z_clip).sum(dim=-1, keepdim=True)
                     clip_rec_loss = (clip_rec_loss * mask).sum() / mask.sum()
                 else:
-                    clip_rec_loss = mean_flat(-(dec_clip * z_clip).sum(dim=-1))
+                    clip_rec_loss = self.mean_flat(-(dec_clip * z_clip).sum(dim=-1))
                     clip_rec_loss = clip_rec_loss.mean()   
             else:
                 clip_rec_loss = 0.0
@@ -421,8 +427,12 @@ class MAETokModel(SoftVQVAE, PreTrainedModel):
         return dec, diff, info
 
 if __name__ == "__main__":
-    config = MAETokConfig.from_pretrained("configs/softvq_config.json")
+    config = MAETokConfig.from_pretrained("configs/MAETok.json")
     model = MAETokModel(config)
+    model.train()
 
     dummy_input = torch.randn(2, 1, 128, 1000)  # Batch size of 2, 1 channel, 128 frequency bins, 1000 time frames
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    dummy_input = dummy_input.to(device)
     output, diff, info = model(dummy_input)

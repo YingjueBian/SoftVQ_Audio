@@ -25,7 +25,7 @@
 
     "num_latent_tokens": 128,
     "enc_patch_size": [16, 25],
-    "dec_patch_size": [16, 24],
+    "dec_patch_size": [16, 25],
     "enc_drop_path_rate": 0.0,
     "dec_drop_path_rate": 0.05,
     "to_audio": "identity",
@@ -39,8 +39,8 @@
     "use_rope": false,
     "rope_mixed": false,
     "rope_theta": 10.0,
-    "repa": false,
-    "repa_patch_size": [16, 16],
+    "repa": true,
+    "repa_patch_size": [16, 25],
     "repa_model": "vit_base_patch16_224",
     "repa_proj_dim": 2048,
     "repa_loss_weight": 1.0,
@@ -49,7 +49,7 @@
     "enc_token_drop": 0.4,
     "enc_token_drop_max": 0.6,
     
-    "aux_dec_model": "vit_tiny_patch14_dinov2_movq",
+    "aux_dec_model": "vit_tinytiny_patch14_dinov2_movq2",
     "aux_loss_mask": true,
     "aux_dec_cls_token": true,
     "aux_hog_dec": true,

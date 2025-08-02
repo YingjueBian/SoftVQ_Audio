@@ -231,7 +231,9 @@ class SoftVQModel(PreTrainedModel):
         self.repa_align = config.repa_align
         self.repa_proj_dim = config.repa_proj_dim
         if config.repa:
-            self.repa_model = create_model(config.repa_model, pretrained=True, img_size=config.image_size, patch_size=config.repa_patch_size)
+            self.repa_model = create_model(config.repa_model, pretrained=True, 
+                                           img_size=(config.n_mels,config.max_time_frames), 
+                                           patch_size=config.repa_patch_size)
             for param in self.repa_model.parameters():
                 param.requires_grad = False
             self.repa_model.eval()
@@ -258,6 +260,7 @@ class SoftVQModel(PreTrainedModel):
                                     'img_size': (config.n_mels, config.max_time_frames),
                                     'patch_size': config.enc_patch_size,
                                     'drop_path_rate': config.enc_drop_path_rate,
+                                    'in_chans': 1,
                                    },
                                 pretrained=config.enc_pretrained,
                                 tuning_method=config.enc_tuning_method,
@@ -266,8 +269,8 @@ class SoftVQModel(PreTrainedModel):
                                 use_rope=config.enc_use_rope,
                                 rope_mixed=config.enc_rope_mixed,
                                 rope_theta=config.enc_rope_theta,
-                                enc_token_drop=config.enc_token_drop,
-                                enc_token_drop_max=config.enc_token_drop_max,
+                                token_drop=config.enc_token_drop,
+                                token_drop_max=config.enc_token_drop_max,
                                 base_spec_size=config.base_spec_size,
                                 )
                                 
@@ -280,6 +283,7 @@ class SoftVQModel(PreTrainedModel):
                                     'img_size': (config.n_mels, config.max_time_frames),
                                     'patch_size': config.dec_patch_size,
                                     'drop_path_rate': config.dec_drop_path_rate,
+                                    'in_chans': 1,
                                     'latent_dim': config.codebook_embed_dim,},
                                 pretrained=config.dec_pretrained,
                                 tuning_method=config.dec_tuning_method,
@@ -318,7 +322,6 @@ class SoftVQModel(PreTrainedModel):
         h = self.encoder(x)
         h = self.quant_conv(h)
         quant, emb_loss, info = self.quantize(h)
-        print(emb_loss)
         
         if self.repa and self.training:
             # get z from repa_encoder
@@ -381,7 +384,10 @@ class SoftVQModel(PreTrainedModel):
 if __name__ == "__main__":
     config = SoftVQConfig.from_pretrained("configs/softvq_config.json")
     model = SoftVQModel(config)
-
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.train()
     # Test the model with a dummy input
     dummy_input = torch.randn(10, 1, 128, 1000)  # Batch size of 10, 1 channel, 128x1000 image
+    dummy_input = dummy_input.to(device)
     output, diff, info = model(dummy_input)

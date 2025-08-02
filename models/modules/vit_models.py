@@ -276,6 +276,7 @@ class Decoder(nn.Module):
 
         self.n_mels = model_kwargs['img_size'][0]
         self.max_time_frames = model_kwargs['img_size'][1]
+        F, T = self.n_mels, self.max_time_frames
         self.patch_size = model_kwargs['patch_size']
         pf, pt = self.patch_size
 
@@ -404,7 +405,7 @@ class Decoder(nn.Module):
                 x = self.mask_token.expand(z.size(0), H * W // (self.patch_size[0] * self.patch_size[1]), -1)
         else:
             x = z 
-            
+
         x = self.model._pos_embed(x, use_ape=self.use_ape)
         x = self.model.patch_drop(x)
         
